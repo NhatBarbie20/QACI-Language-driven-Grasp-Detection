@@ -1,0 +1,30 @@
+# Defaults shared by all experiments. Experiment files override single values.
+name: default
+
+data:
+  root: data/grasp_anything_pp
+  image_size: 224
+  augment: true          # random horizontal / vertical flips on the training split
+  num_workers: 4
+  max_train_samples: null  # set to a small number for smoke tests
+  max_eval_samples: null
+
+model:
+  fusion: film           # none | concat | film
+  channels: 32
+  num_blocks: 5
+  text_hidden: 256
+  dropout: 0.1
+
+loss:
+  cf_weight: 0.0         # weight of the counterfactual prompt loss (0 disables it)
+  cf_margin: 0.5
+
+train:
+  epochs: 30
+  batch_size: 32
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  amp: true
+  seed: 0
+  output_dir: outputs

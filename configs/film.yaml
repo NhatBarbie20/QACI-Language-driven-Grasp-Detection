@@ -1,0 +1,4 @@
+# Main baseline: GR-ConvNet-style network with CLIP text and FiLM fusion.
+name: film
+model:
+  fusion: film

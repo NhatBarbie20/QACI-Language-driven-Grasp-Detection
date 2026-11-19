@@ -1,0 +1,4 @@
+# Vision-only reference: the instruction is not used.
+name: vision_only
+model:
+  fusion: none

@@ -1,0 +1,4 @@
+# Text vector concatenated to the bottleneck features.
+name: concat
+model:
+  fusion: concat

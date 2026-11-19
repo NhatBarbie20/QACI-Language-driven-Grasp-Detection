@@ -1,0 +1,6 @@
+# Proposed: FiLM baseline + counterfactual prompt loss.
+name: film_cf
+model:
+  fusion: film
+loss:
+  cf_weight: 1.0

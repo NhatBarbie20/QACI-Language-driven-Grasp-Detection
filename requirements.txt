@@ -1,0 +1,10 @@
+torch>=2.2
+numpy
+pillow
+scikit-image
+matplotlib
+requests
+tqdm
+pyyaml
+scipy
+transformers

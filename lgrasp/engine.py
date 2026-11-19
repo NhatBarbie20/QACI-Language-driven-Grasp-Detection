@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import random
 
 import numpy as np
@@ -51,6 +52,28 @@ def _embed(texts: list[str], embeddings: TextEmbeddings, device: torch.device) -
     return embeddings(texts).to(device, non_blocking=True)
 
 
+@contextlib.contextmanager
+def frozen_running_stats(model: nn.Module):
+    """Run a training-mode forward pass without updating BatchNorm running statistics.
+
+    The swapped-instruction pass produces activations with a very different
+    distribution from the matching pass. If both update the running averages,
+    the stored statistics describe neither and the network breaks in evaluation
+    mode. Inside this context BatchNorm still normalises with batch statistics
+    (so gradients are unchanged) but leaves its running averages untouched; they
+    then describe matching instructions only, which is the test-time input.
+    """
+    norms = [module for module in model.modules() if isinstance(module, nn.modules.batchnorm._BatchNorm)]
+    momenta = [norm.momentum for norm in norms]
+    for norm in norms:
+        norm.momentum = 0.0
+    try:
+        yield
+    finally:
+        for norm, momentum in zip(norms, momenta):
+            norm.momentum = momentum
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -85,7 +108,8 @@ def train_one_epoch(
             swappable = [i for i, text in enumerate(batch["negative_text"]) if text]
             if cf_weight > 0 and use_text and swappable:
                 swapped_text = _embed([batch["negative_text"][i] for i in swappable], embeddings, device)
-                swapped = model.decode(model.select(features, swappable), swapped_text)
+                with frozen_running_stats(model):
+                    swapped = model.decode(model.select(features, swappable), swapped_text)
                 # The factorised model exposes its language-dependent factor; contrast that one.
                 key = "grounding" if "grounding" in prediction else "quality"
                 losses["counterfactual"] = counterfactual_loss(

@@ -135,6 +135,11 @@ class GraspNet(nn.Module):
         """Language-independent image features ``[B, 4*channels, H/4, W/4]``."""
         return self.stem(image)
 
+    @staticmethod
+    def select(features: torch.Tensor, indices: list[int]) -> torch.Tensor:
+        """Features of a subset of the batch."""
+        return features[indices]
+
     def decode(self, features: torch.Tensor, text: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         """Grasp maps ``[B, 1, H, W]`` for image features and instruction embeddings.
 
@@ -155,14 +160,3 @@ class GraspNet(nn.Module):
     def forward(self, image: torch.Tensor, text: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         return self.decode(self.encode(image), text)
 
-
-def build_model(config: dict, text_dim: int) -> GraspNet:
-    """Create a :class:`GraspNet` from the ``model`` section of a config."""
-    return GraspNet(
-        fusion=config["fusion"],
-        text_dim=text_dim,
-        channels=config["channels"],
-        num_blocks=config["num_blocks"],
-        text_hidden=config["text_hidden"],
-        dropout=config["dropout"],
-    )

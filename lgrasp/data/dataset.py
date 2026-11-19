@@ -44,11 +44,15 @@ class GraspAnythingPP(Dataset):
         image_size: side of the network input in pixels.
         augment: apply random horizontal / vertical flips (training only). The
             instructions never mention left or right, so flips keep them valid.
+        all_objects: additionally return ``geometry_quality``, ``geometry_cos``,
+            ``geometry_sin`` and ``geometry_width``: the target maps rendered from
+            the grasps of *every* annotated object of the image (training only).
+            They supervise outputs that do not depend on the instruction.
         max_samples: keep only the first N samples (for smoke tests).
     """
 
     def __init__(self, root: str | Path, split: str, image_size: int = 224, augment: bool = False,
-                 max_samples: int | None = None):
+                 all_objects: bool = False, max_samples: int | None = None):
         if split not in SPLITS:
             raise ValueError(f"Unknown split {split!r}; expected one of {SPLITS}")
         self.root = Path(root)
@@ -57,6 +61,7 @@ class GraspAnythingPP(Dataset):
         self.scale = image_size / LABEL_IMAGE_SIZE
         self.training = split == "train"
         self.augment = augment and self.training
+        self.all_objects = all_objects and self.training
 
         manifest = load_manifest(self.root)
         self.scenes: dict[str, dict] = manifest["scenes"]
@@ -69,8 +74,12 @@ class GraspAnythingPP(Dataset):
         # Instructions of every object in a scene, including objects outside the
         # split: they are only ever used as alternative prompts.
         self._scene_instructions: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        # One label file per distinct set of grasps in a scene (parts often share labels).
+        scene_labels: dict[str, dict[tuple[int, int], str]] = defaultdict(dict)
         for sample in manifest["samples"]:
             self._scene_instructions[sample["scene"]][sample["obj"]].append(sample["instruction"])
+            scene_labels[sample["scene"]].setdefault((sample["obj"], sample["label_group"]), sample["id"])
+        self._scene_label_ids = {scene: sorted(ids.values()) for scene, ids in scene_labels.items()}
 
         self._mean = torch.tensor(IMAGE_MEAN).view(3, 1, 1)
         self._std = torch.tensor(IMAGE_STD).view(3, 1, 1)
@@ -101,15 +110,23 @@ class GraspAnythingPP(Dataset):
             image = image.resize((self.image_size, self.image_size), Image.BILINEAR)
         return image
 
+    def _grasps_of(self, sample_id: str) -> np.ndarray:
+        return label_to_grasps(load_grasp_label(self.root / "grasp_label_positive" / f"{sample_id}.pt"), self.scale)
+
     def load_grasps(self, index: int) -> np.ndarray:
         """Ground-truth grasps ``[N, 5]`` of a sample at the dataset resolution."""
-        label = load_grasp_label(self.root / "grasp_label_positive" / f"{self.samples[index]['id']}.pt")
-        return label_to_grasps(label, self.scale)
+        return self._grasps_of(self.samples[index]["id"])
+
+    def load_scene_grasps(self, index: int) -> np.ndarray:
+        """Grasps ``[N, 5]`` of every annotated object in the image of a sample."""
+        ids = self._scene_label_ids[self.samples[index]["scene"]]
+        return np.concatenate([self._grasps_of(sample_id) for sample_id in ids])
 
     def __getitem__(self, index: int) -> dict:
         sample = self.samples[index]
         image = self.load_image(index)
         grasps = self.load_grasps(index)
+        scene_grasps = self.load_scene_grasps(index) if self.all_objects else None
         if self.augment:
             horizontal, vertical = random.random() < 0.5, random.random() < 0.5
             if horizontal:
@@ -117,10 +134,15 @@ class GraspAnythingPP(Dataset):
             if vertical:
                 image = image.transpose(Image.FLIP_TOP_BOTTOM)
             grasps = flip_grasps(grasps, self.image_size, horizontal, vertical)
+            if scene_grasps is not None:
+                scene_grasps = flip_grasps(scene_grasps, self.image_size, horizontal, vertical)
         pixels = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
         maps = render_grasp_maps(grasps, self.image_size)
 
         item = {key: torch.from_numpy(maps[key]).unsqueeze(0) for key in TARGET_KEYS}
+        if scene_grasps is not None:
+            scene_maps = render_grasp_maps(scene_grasps, self.image_size)
+            item.update({f"geometry_{key}": torch.from_numpy(scene_maps[key]).unsqueeze(0) for key in TARGET_KEYS})
         item.update(
             image=(pixels - self._mean) / self._std,
             text=sample["instruction"],
@@ -133,7 +155,10 @@ class GraspAnythingPP(Dataset):
 
 def collate(batch: list[dict]) -> dict:
     """Stack fixed-size tensors and keep variable-length fields as lists."""
-    stacked = {key: torch.stack([item[key] for item in batch]) for key in ("image", *TARGET_KEYS)}
+    keys = ["image", *TARGET_KEYS]
+    if f"geometry_{TARGET_KEYS[0]}" in batch[0]:
+        keys += [f"geometry_{key}" for key in TARGET_KEYS]
+    stacked = {key: torch.stack([item[key] for item in batch]) for key in keys}
     for key in ("text", "negative_text", "grasps", "id"):
         stacked[key] = [item[key] for item in batch]
     return stacked

@@ -1,0 +1,8 @@
+# Full model: factorised + all-object geometry supervision + counterfactual prompt loss.
+name: factor_full
+data:
+  all_objects: true
+model:
+  arch: factor
+loss:
+  cf_weight: 1.0

@@ -6,11 +6,20 @@ data:
   image_size: 224
   augment: true          # random horizontal / vertical flips on the training split
   num_workers: 4
+  all_objects: false     # also load the grasps of every object of the image (factor arch only)
   max_train_samples: null  # set to a small number for smoke tests
   max_eval_samples: null
 
 model:
+  arch: grasp_net        # grasp_net | factor
+  # --- arch: grasp_net
   fusion: film           # none | concat | film
+  text_model: openai/clip-vit-base-patch32
+  # --- arch: factor (geometry network x CLIP grounding map)
+  clip: openai/clip-vit-base-patch16
+  clip_resolution: 224
+  grounding: refine      # raw | refine
+  # --- shared
   channels: 32
   num_blocks: 5
   text_hidden: 256

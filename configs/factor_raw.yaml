@@ -1,0 +1,5 @@
+# Factorised model; grounding is an affine function of the frozen CLIP similarity.
+name: factor_raw
+model:
+  arch: factor
+  grounding: raw

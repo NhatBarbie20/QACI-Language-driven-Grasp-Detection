@@ -1,0 +1,6 @@
+# Factorised model; geometry branch supervised with the grasps of every object.
+name: factor_all
+data:
+  all_objects: true
+model:
+  arch: factor

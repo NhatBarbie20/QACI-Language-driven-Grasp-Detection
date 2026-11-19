@@ -25,6 +25,12 @@ def _merge(base: dict, override: dict) -> dict:
     return merged
 
 
+def with_defaults(config: dict) -> dict:
+    """Complete a stored config with the current defaults (for older checkpoints)."""
+    with open(DEFAULT_CONFIG, encoding="utf-8") as file:
+        return _merge(yaml.safe_load(file), config)
+
+
 def load_config(path: str | Path | None = None, overrides: list[str] | None = None) -> dict:
     """Load the default config, apply the experiment file, then ``a.b=value`` overrides."""
     with open(DEFAULT_CONFIG, encoding="utf-8") as file:

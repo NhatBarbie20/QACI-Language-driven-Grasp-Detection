@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lgrasp.engine import evaluate, make_loader  # noqa: E402
 from lgrasp.metrics import harmonic_mean  # noqa: E402
-from lgrasp.models.grasp_net import build_model  # noqa: E402
+from lgrasp.config import with_defaults  # noqa: E402
+from lgrasp.models import build_model, load_trainable_state, text_model_name  # noqa: E402
 from lgrasp.text import TextEmbeddings  # noqa: E402
 from lgrasp.utils.visualize import save_prediction_grid  # noqa: E402
 
@@ -36,13 +37,13 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(args.run / args.checkpoint, map_location=device, weights_only=True)
-    config = checkpoint["config"]
+    config = with_defaults(checkpoint["config"])
     if args.root is not None:
         config["data"]["root"] = str(args.root)
 
-    embeddings = TextEmbeddings(config["data"]["root"])
+    embeddings = TextEmbeddings(config["data"]["root"], text_model_name(config["model"]))
     model = build_model(config["model"], checkpoint["text_dim"]).to(device)
-    model.load_state_dict(checkpoint["model"])
+    load_trainable_state(model, checkpoint["model"])
 
     results = {"name": config["name"], "epoch": checkpoint["epoch"]}
     for split in TEST_SPLITS:

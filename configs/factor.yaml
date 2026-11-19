@@ -1,0 +1,4 @@
+# Factorised model with a learned refinement of the CLIP similarity.
+name: factor
+model:
+  arch: factor

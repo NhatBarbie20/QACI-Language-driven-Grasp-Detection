@@ -21,7 +21,7 @@ def main() -> None:
     args = parser.parse_args()
 
     path = build_text_embeddings(args.root, args.model)
-    table = TextEmbeddings(args.root)
+    table = TextEmbeddings(args.root, args.model)
     print(f"Saved {path}: {len(table.embeddings)} instructions, dimension {table.dim}, model {table.model_name}")
 
 

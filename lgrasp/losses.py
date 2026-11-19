@@ -23,19 +23,34 @@ import torch
 import torch.nn.functional as F
 
 
-def grasp_loss(prediction: dict[str, torch.Tensor], target: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def grasp_loss(
+    prediction: dict[str, torch.Tensor],
+    target: dict[str, torch.Tensor],
+    geometry_target: dict[str, torch.Tensor] | None = None,
+) -> dict[str, torch.Tensor]:
     """Per-map losses and their sum (key ``"grasp"``).
 
     Quality is a per-pixel binary classification (logits + BCE); the angle and
     width maps are regressed with a smooth L1 loss, as in GR-ConvNet.
+
+    ``geometry_target`` holds the maps rendered from the grasps of *every* object
+    of the image. When given (factorised model only), the language-independent
+    outputs (geometry factor, angle, width) are supervised with it, while the
+    final quality is still supervised with the grasps of the named object.
     """
+    shared = geometry_target if geometry_target is not None else target
     losses = {
-        "quality": F.binary_cross_entropy_with_logits(prediction["quality"], target["quality"]),
-        "cos": F.smooth_l1_loss(prediction["cos"], target["cos"]),
-        "sin": F.smooth_l1_loss(prediction["sin"], target["sin"]),
-        "width": F.smooth_l1_loss(prediction["width"], target["width"]),
+        "quality": F.binary_cross_entropy_with_logits(prediction["quality"].float(), target["quality"]),
+        "cos": F.smooth_l1_loss(prediction["cos"], shared["cos"]),
+        "sin": F.smooth_l1_loss(prediction["sin"], shared["sin"]),
+        "width": F.smooth_l1_loss(prediction["width"], shared["width"]),
     }
     losses["grasp"] = losses["quality"] + losses["cos"] + losses["sin"] + losses["width"]
+    if geometry_target is not None:
+        losses["geometry"] = F.binary_cross_entropy_with_logits(
+            prediction["geometry"].float(), geometry_target["quality"]
+        )
+        losses["grasp"] = losses["grasp"] + losses["geometry"]
     return losses
 
 

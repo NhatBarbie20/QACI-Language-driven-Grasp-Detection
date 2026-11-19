@@ -2,7 +2,7 @@
 
 The text encoder is never trained and the dataset has only a few thousand
 distinct instructions, so every instruction is encoded once and stored in
-``<data root>/text_embeddings.pt``. Training then needs neither the CLIP model
+``<data root>/text_embeddings_<clip model>.pt``. Training then needs neither the CLIP model
 nor a tokenizer, which keeps GPU memory and epoch time low.
 """
 
@@ -14,8 +14,12 @@ import torch
 
 from lgrasp.data.manifest import load_manifest
 
-EMBEDDINGS_NAME = "text_embeddings.pt"
 DEFAULT_TEXT_MODEL = "openai/clip-vit-base-patch32"
+
+
+def embeddings_path(root: str | Path, model_name: str) -> Path:
+    """Cache file of a CLIP checkpoint, e.g. ``text_embeddings_clip-vit-base-patch32.pt``."""
+    return Path(root) / f"text_embeddings_{model_name.split('/')[-1]}.pt"
 
 
 @torch.no_grad()
@@ -39,7 +43,7 @@ def build_text_embeddings(root: str | Path, model_name: str = DEFAULT_TEXT_MODEL
     """Encode every instruction of the manifest and save the lookup table."""
     root = Path(root)
     texts = sorted({sample["instruction"] for sample in load_manifest(root)["samples"]})
-    path = root / EMBEDDINGS_NAME
+    path = embeddings_path(root, model_name)
     torch.save({"model": model_name, "texts": texts, "embeddings": encode_texts(texts, model_name)}, path)
     return path
 
@@ -47,10 +51,10 @@ def build_text_embeddings(root: str | Path, model_name: str = DEFAULT_TEXT_MODEL
 class TextEmbeddings:
     """Lookup table from instruction string to its embedding."""
 
-    def __init__(self, root: str | Path):
-        path = Path(root) / EMBEDDINGS_NAME
-        if not path.exists():
-            raise FileNotFoundError(f"{path} not found. Run: python scripts/encode_text.py --root {root}")
+    def __init__(self, root: str | Path, model_name: str = DEFAULT_TEXT_MODEL):
+        path = embeddings_path(root, model_name)
+        if not path.exists():  # first use of this checkpoint: encode once, then reuse
+            build_text_embeddings(root, model_name)
         table = torch.load(path, map_location="cpu", weights_only=True)
         self.model_name: str = table["model"]
         self.embeddings: torch.Tensor = table["embeddings"]

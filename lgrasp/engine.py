@@ -6,13 +6,13 @@ import random
 
 import numpy as np
 import torch
+from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from lgrasp.data.dataset import TARGET_KEYS, GraspAnythingPP, collate
 from lgrasp.losses import counterfactual_loss, grasp_loss
 from lgrasp.metrics import GraspMeter, decode_grasp, is_correct
-from lgrasp.models.grasp_net import GraspNet
 from lgrasp.text import TextEmbeddings
 
 
@@ -32,6 +32,7 @@ def make_loader(config: dict, split: str) -> DataLoader:
         split,
         image_size=data["image_size"],
         augment=data["augment"],
+        all_objects=data["all_objects"],
         max_samples=data["max_train_samples"] if training else data["max_eval_samples"],
     )
     return DataLoader(
@@ -51,7 +52,7 @@ def _embed(texts: list[str], embeddings: TextEmbeddings, device: torch.device) -
 
 
 def train_one_epoch(
-    model: GraspNet,
+    model: nn.Module,
     loader: DataLoader,
     embeddings: TextEmbeddings,
     optimizer: torch.optim.Optimizer,
@@ -70,20 +71,25 @@ def train_one_epoch(
     for batch in tqdm(loader, desc="train", leave=False):
         image = batch["image"].to(device, non_blocking=True)
         target = {key: batch[key].to(device, non_blocking=True) for key in TARGET_KEYS}
+        geometry_target = None
+        if "geometry_quality" in batch:
+            geometry_target = {key: batch[f"geometry_{key}"].to(device, non_blocking=True) for key in TARGET_KEYS}
 
         with torch.autocast(device.type, enabled=scaler.is_enabled()):
             features = model.encode(image)
             prediction = model.decode(features, _embed(batch["text"], embeddings, device) if use_text else None)
-            losses = grasp_loss(prediction, target)
+            losses = grasp_loss(prediction, target, geometry_target)
             loss = losses["grasp"]
 
             # Second pass with an instruction for another object of the same image.
             swappable = [i for i, text in enumerate(batch["negative_text"]) if text]
             if cf_weight > 0 and use_text and swappable:
                 swapped_text = _embed([batch["negative_text"][i] for i in swappable], embeddings, device)
-                swapped = model.decode(features[swappable], swapped_text)
+                swapped = model.decode(model.select(features, swappable), swapped_text)
+                # The factorised model exposes its language-dependent factor; contrast that one.
+                key = "grounding" if "grounding" in prediction else "quality"
                 losses["counterfactual"] = counterfactual_loss(
-                    prediction["quality"][swappable], swapped["quality"], target["quality"][swappable], cf_margin
+                    prediction[key][swappable], swapped[key], target["quality"][swappable], cf_margin
                 )
                 loss = loss + cf_weight * losses["counterfactual"]
             losses["total"] = loss
@@ -103,7 +109,7 @@ def train_one_epoch(
 
 def _decode_batch(prediction: dict[str, torch.Tensor]) -> list[np.ndarray]:
     """Best grasp of every sample of a batch of network outputs."""
-    maps = {key: value.float().squeeze(1).cpu().numpy() for key, value in prediction.items()}
+    maps = {key: prediction[key].float().squeeze(1).cpu().numpy() for key in TARGET_KEYS}
     quality = 1.0 / (1.0 + np.exp(-maps["quality"]))
     return [
         decode_grasp(quality[i], maps["cos"][i], maps["sin"][i], maps["width"][i]) for i in range(len(quality))
@@ -112,7 +118,7 @@ def _decode_batch(prediction: dict[str, torch.Tensor]) -> list[np.ndarray]:
 
 @torch.no_grad()
 def evaluate(
-    model: GraspNet,
+    model: nn.Module,
     loader: DataLoader,
     embeddings: TextEmbeddings,
     device: torch.device,
@@ -139,7 +145,7 @@ def evaluate(
         if swappable:
             if use_text:
                 swapped_text = _embed([batch["negative_text"][i] for i in swappable], embeddings, device)
-                decoded = _decode_batch(model.decode(features[swappable], swapped_text))
+                decoded = _decode_batch(model.decode(model.select(features, swappable), swapped_text))
                 swapped_grasps = dict(zip(swappable, decoded))
             else:  # without language the prediction cannot change
                 swapped_grasps = {i: grasps[i] for i in swappable}

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lgrasp.config import load_config  # noqa: E402
 from lgrasp.engine import evaluate, make_loader, seed_everything, train_one_epoch  # noqa: E402
-from lgrasp.models.grasp_net import build_model  # noqa: E402
+from lgrasp.models import build_model, text_model_name, trainable_state  # noqa: E402
 from lgrasp.text import TextEmbeddings  # noqa: E402
 
 
@@ -45,14 +45,16 @@ def main() -> None:
     with open(run_dir / "config.yaml", "w", encoding="utf-8") as file:
         yaml.safe_dump(config, file, sort_keys=False)
 
-    embeddings = TextEmbeddings(config["data"]["root"])
+    if config["data"]["all_objects"] and config["model"]["arch"] != "factor":
+        raise SystemExit("data.all_objects needs model.arch=factor (a language-independent geometry output)")
+    embeddings = TextEmbeddings(config["data"]["root"], text_model_name(config["model"]))
     train_loader = make_loader(config, "train")
     val_loader = make_loader(config, "val")
     model = build_model(config["model"], embeddings.dim).to(device)
-    parameters = sum(p.numel() for p in model.parameters())
-    print(f"{config['name']}: {parameters / 1e6:.2f}M parameters, {len(train_loader.dataset)} training samples, device {device}")
+    parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"{config['name']}: {parameters / 1e6:.2f}M trainable parameters, {len(train_loader.dataset)} training samples, device {device}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=settings["lr"], weight_decay=settings["weight_decay"])
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=settings["lr"], weight_decay=settings["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=settings["lr"], total_steps=settings["epochs"] * len(train_loader), pct_start=0.05
     )
@@ -68,7 +70,7 @@ def main() -> None:
         with open(run_dir / "log.jsonl", "a", encoding="utf-8") as file:
             file.write(json.dumps(record) + "\n")
 
-        checkpoint = {"model": model.state_dict(), "config": config, "epoch": epoch, "val": metrics,
+        checkpoint = {"model": trainable_state(model), "config": config, "epoch": epoch, "val": metrics,
                       "text_dim": embeddings.dim}
         torch.save(checkpoint, run_dir / "last.pt")
         if metrics["success_rate"] > best:

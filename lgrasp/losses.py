@@ -15,6 +15,13 @@
 
     A network that ignores the instruction produces the same map twice and pays
     the full margin, so the term directly penalises language-blind solutions.
+
+``grounding_loss``
+    Direct supervision of the grounding factor of the factorised model. The other
+    annotated objects of the image are free negatives: the grounding map must be
+    high on the grasp region of the named object and low on the grasp regions of
+    every other object. Pixels without any annotation are ignored, because the
+    grasp regions do not cover whole objects.
 """
 
 from __future__ import annotations
@@ -52,6 +59,27 @@ def grasp_loss(
         )
         losses["grasp"] = losses["grasp"] + losses["geometry"]
     return losses
+
+
+def grounding_loss(grounding_logits: torch.Tensor, region: torch.Tensor, scene_region: torch.Tensor) -> torch.Tensor:
+    """Balanced binary cross-entropy of the grounding map on annotated pixels.
+
+    Args:
+        grounding_logits: ``[B, 1, H, W]`` logits of the grounding factor.
+        region: ``[B, 1, H, W]``, positive inside the grasp region of the named object.
+        scene_region: ``[B, 1, H, W]``, positive inside the grasp region of any object.
+
+    Positives and negatives are averaged separately, so the loss does not depend
+    on how many other objects an image has. Returns zero if the batch has no
+    negative pixel (every image has a single annotated object).
+    """
+    logits = grounding_logits.float()
+    positive = (region > 0).float()
+    negative = (scene_region > 0).float() * (1 - positive)
+    if negative.sum() == 0 or positive.sum() == 0:
+        return logits.new_zeros(())
+    loss = F.binary_cross_entropy_with_logits(logits, positive, reduction="none")
+    return 0.5 * ((loss * positive).sum() / positive.sum() + (loss * negative).sum() / negative.sum())
 
 
 def counterfactual_loss(

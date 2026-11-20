@@ -1,0 +1,9 @@
+# Factorised model + all-object geometry supervision + grounding supervision with
+# the other objects of the image as negatives.
+name: factor_ground
+data:
+  all_objects: true
+model:
+  arch: factor
+loss:
+  ground_weight: 1.0

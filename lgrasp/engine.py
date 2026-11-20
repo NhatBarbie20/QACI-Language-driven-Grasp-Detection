@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from lgrasp.data.dataset import TARGET_KEYS, GraspAnythingPP, collate
-from lgrasp.losses import counterfactual_loss, grasp_loss
+from lgrasp.losses import counterfactual_loss, grasp_loss, grounding_loss
 from lgrasp.metrics import GraspMeter, decode_grasp, is_correct
 from lgrasp.text import TextEmbeddings
 
@@ -34,6 +34,7 @@ def make_loader(config: dict, split: str) -> DataLoader:
         image_size=data["image_size"],
         augment=data["augment"],
         all_objects=data["all_objects"],
+        max_negative_overlap=data["max_negative_overlap"],
         max_samples=data["max_train_samples"] if training else data["max_eval_samples"],
     )
     return DataLoader(
@@ -87,6 +88,7 @@ def train_one_epoch(
     """Run one epoch and return the mean of every loss term."""
     model.train()
     cf_weight, cf_margin = config["loss"]["cf_weight"], config["loss"]["cf_margin"]
+    ground_weight = config["loss"]["ground_weight"]
     use_text = model.fusion != "none"
     totals: dict[str, float] = {}
     steps = 0
@@ -103,6 +105,13 @@ def train_one_epoch(
             prediction = model.decode(features, _embed(batch["text"], embeddings, device) if use_text else None)
             losses = grasp_loss(prediction, target, geometry_target)
             loss = losses["grasp"]
+
+            # Other objects of the image as negatives for the grounding factor.
+            if ground_weight > 0 and geometry_target is not None and "grounding" in prediction:
+                losses["grounding"] = grounding_loss(
+                    prediction["grounding"], target["quality"], geometry_target["quality"]
+                )
+                loss = loss + ground_weight * losses["grounding"]
 
             # Second pass with an instruction for another object of the same image.
             swappable = [i for i, text in enumerate(batch["negative_text"]) if text]
@@ -140,6 +149,21 @@ def _decode_batch(prediction: dict[str, torch.Tensor]) -> list[np.ndarray]:
     ]
 
 
+GROUNDING_OVERRIDES = ("model", "none", "oracle")
+
+
+def _override_grounding(prediction: dict[str, torch.Tensor], mode: str, region: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Replace the grounding factor of a factorised prediction (diagnostics only).
+
+    ``"none"`` drops it, so the quality is the geometry factor alone: what the
+    model does without language. ``"oracle"`` replaces it with the ground-truth
+    grasp region of the named object: the best any grounding map could do.
+    """
+    geometry = prediction["geometry"].float()
+    quality = geometry if mode == "none" else torch.where(region > 0, geometry, torch.full_like(geometry, -20.0))
+    return {**prediction, "quality": quality}
+
+
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
@@ -147,13 +171,22 @@ def evaluate(
     embeddings: TextEmbeddings,
     device: torch.device,
     collect: int = 0,
+    grounding: str = "model",
 ) -> tuple[dict[str, float], list[dict]]:
     """Evaluate on a split.
 
     Returns the metrics of :class:`lgrasp.metrics.GraspMeter` and, for the first
     ``collect`` samples that have a swapped instruction, the predictions needed
     for qualitative figures.
+
+    ``grounding`` other than ``"model"`` is a diagnostic for the factorised
+    architecture, see :func:`_override_grounding`. The swapped-instruction
+    metrics are not defined for ``"oracle"`` and are reported as zero.
     """
+    if grounding not in GROUNDING_OVERRIDES:
+        raise ValueError(f"Unknown grounding {grounding!r}; expected one of {GROUNDING_OVERRIDES}")
+    if grounding != "model" and model.fusion != "factor":
+        raise ValueError("The grounding override needs the factorised architecture")
     model.eval()
     use_text = model.fusion != "none"
     size = loader.dataset.image_size
@@ -162,12 +195,15 @@ def evaluate(
 
     for batch in tqdm(loader, desc=f"eval {loader.dataset.split}", leave=False):
         features = model.encode(batch["image"].to(device, non_blocking=True))
-        grasps = _decode_batch(model.decode(features, _embed(batch["text"], embeddings, device) if use_text else None))
+        prediction = model.decode(features, _embed(batch["text"], embeddings, device) if use_text else None)
+        if grounding != "model":
+            prediction = _override_grounding(prediction, grounding, batch["quality"].to(device))
+        grasps = _decode_batch(prediction)
 
-        swappable = [i for i, text in enumerate(batch["negative_text"]) if text]
+        swappable = [i for i, text in enumerate(batch["negative_text"]) if text] if grounding != "oracle" else []
         swapped_grasps: dict[int, np.ndarray] = {}
         if swappable:
-            if use_text:
+            if use_text and grounding == "model":
                 swapped_text = _embed([batch["negative_text"][i] for i in swappable], embeddings, device)
                 decoded = _decode_batch(model.decode(model.select(features, swappable), swapped_text))
                 swapped_grasps = dict(zip(swappable, decoded))

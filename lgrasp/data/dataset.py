@@ -38,6 +38,13 @@ class GraspAnythingPP(Dataset):
     The negative prompt is drawn at random for the training split and is fixed
     for evaluation splits, so evaluation is deterministic.
 
+    Grasp-Anything++ contains differently named objects whose grasp annotations
+    coincide (13% of the object pairs of an image have identical labels). Such a
+    pair cannot tell whether a model followed the instruction, and as a training
+    negative it contradicts the positive. ``max_negative_overlap`` restricts the
+    negative prompt to objects whose grasp region overlaps the region of the
+    named object by at most that fraction (of the smaller region).
+
     Args:
         root: dataset folder that contains ``manifest.json``.
         split: one of :data:`SPLITS`.
@@ -49,10 +56,11 @@ class GraspAnythingPP(Dataset):
             the grasps of *every* annotated object of the image (training only).
             They supervise outputs that do not depend on the instruction.
         max_samples: keep only the first N samples (for smoke tests).
+        max_negative_overlap: see above; 1.0 accepts every other object.
     """
 
     def __init__(self, root: str | Path, split: str, image_size: int = 224, augment: bool = False,
-                 all_objects: bool = False, max_samples: int | None = None):
+                 all_objects: bool = False, max_samples: int | None = None, max_negative_overlap: float = 1.0):
         if split not in SPLITS:
             raise ValueError(f"Unknown split {split!r}; expected one of {SPLITS}")
         self.root = Path(root)
@@ -62,6 +70,7 @@ class GraspAnythingPP(Dataset):
         self.training = split == "train"
         self.augment = augment and self.training
         self.all_objects = all_objects and self.training
+        self.max_negative_overlap = max_negative_overlap
 
         manifest = load_manifest(self.root)
         self.scenes: dict[str, dict] = manifest["scenes"]
@@ -73,11 +82,11 @@ class GraspAnythingPP(Dataset):
 
         # Instructions of every object in a scene, including objects outside the
         # split: they are only ever used as alternative prompts.
-        self._scene_instructions: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+        self._scene_instructions: dict[str, dict[int, list[str]]] = {}  # plain dicts: picklable for data loader workers
         # One label file per distinct set of grasps in a scene (parts often share labels).
         scene_labels: dict[str, dict[tuple[int, int], str]] = defaultdict(dict)
         for sample in manifest["samples"]:
-            self._scene_instructions[sample["scene"]][sample["obj"]].append(sample["instruction"])
+            self._scene_instructions.setdefault(sample["scene"], {}).setdefault(sample["obj"], []).append(sample["instruction"])
             scene_labels[sample["scene"]].setdefault((sample["obj"], sample["label_group"]), sample["id"])
         self._scene_label_ids = {scene: sorted(ids.values()) for scene, ids in scene_labels.items()}
 
@@ -92,11 +101,33 @@ class GraspAnythingPP(Dataset):
         sample = self.samples[index]
         return len(self._scene_instructions[sample["scene"]]) > 1
 
-    def _negative_text(self, sample: dict) -> str:
+    def object_overlaps(self, sample: dict, grasps: np.ndarray) -> dict[int, float]:
+        """Overlap of the grasp region of ``sample`` with that of every other object of its image.
+
+        The overlap is the intersection divided by the smaller of the two regions,
+        so it is 1 when one region contains the other.
+        """
+        region = render_grasp_maps(grasps, self.image_size)["quality"] > 0
+        regions: dict[int, np.ndarray] = {}
+        for label_id in self._scene_label_ids[sample["scene"]]:
+            obj = int(label_id.rsplit("_", 2)[1])
+            if obj != sample["obj"]:
+                other = render_grasp_maps(self._grasps_of(label_id), self.image_size)["quality"] > 0
+                regions[obj] = regions[obj] | other if obj in regions else other
+        return {
+            obj: float((region & other).sum()) / max(min(int(region.sum()), int(other.sum())), 1)
+            for obj, other in regions.items()
+        }
+
+    def _negative_text(self, sample: dict, grasps: np.ndarray | None = None) -> str:
+        allowed = None
+        if self.max_negative_overlap < 1.0 and grasps is not None:
+            overlaps = self.object_overlaps(sample, grasps)
+            allowed = {obj for obj, overlap in overlaps.items() if overlap <= self.max_negative_overlap}
         others = [
             text
             for obj, texts in sorted(self._scene_instructions[sample["scene"]].items())
-            if obj != sample["obj"]
+            if obj != sample["obj"] and (allowed is None or obj in allowed)
             for text in texts
         ]
         if not others:
@@ -127,6 +158,7 @@ class GraspAnythingPP(Dataset):
         image = self.load_image(index)
         grasps = self.load_grasps(index)
         scene_grasps = self.load_scene_grasps(index) if self.all_objects else None
+        negative_text = self._negative_text(sample, grasps)  # before flips: overlaps do not depend on them
         if self.augment:
             horizontal, vertical = random.random() < 0.5, random.random() < 0.5
             if horizontal:
@@ -146,7 +178,7 @@ class GraspAnythingPP(Dataset):
         item.update(
             image=(pixels - self._mean) / self._std,
             text=sample["instruction"],
-            negative_text=self._negative_text(sample),
+            negative_text=negative_text,
             grasps=torch.from_numpy(grasps),
             id=sample["id"],
         )

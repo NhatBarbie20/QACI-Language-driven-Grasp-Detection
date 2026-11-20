@@ -15,6 +15,9 @@ import torch
 from lgrasp.data.manifest import load_manifest
 
 DEFAULT_TEXT_MODEL = "openai/clip-vit-base-patch32"
+PROMPTS = ("sentence", "noun")
+# CLIP is trained on captions, not commands: its recommended zero-shot prompt.
+NOUN_TEMPLATE = "a photo of a {}"
 
 
 def embeddings_path(root: str | Path, model_name: str) -> Path:
@@ -42,20 +45,38 @@ def encode_texts(texts: list[str], model_name: str = DEFAULT_TEXT_MODEL, batch_s
 def build_text_embeddings(root: str | Path, model_name: str = DEFAULT_TEXT_MODEL) -> Path:
     """Encode every instruction of the manifest and save the lookup table."""
     root = Path(root)
-    texts = sorted({sample["instruction"] for sample in load_manifest(root)["samples"]})
+    samples = load_manifest(root)["samples"]
+    texts = {sample["instruction"] for sample in samples}
+    texts.update(NOUN_TEMPLATE.format(sample["object_name"]) for sample in samples)
+    texts = sorted(texts)
     path = embeddings_path(root, model_name)
     torch.save({"model": model_name, "texts": texts, "embeddings": encode_texts(texts, model_name)}, path)
     return path
 
 
 class TextEmbeddings:
-    """Lookup table from instruction string to its embedding."""
+    """Lookup table from instruction string to its embedding.
 
-    def __init__(self, root: str | Path, model_name: str = DEFAULT_TEXT_MODEL):
+    With ``prompt="noun"`` an instruction is represented by the object it names,
+    encoded as :data:`NOUN_TEMPLATE`, instead of by the full sentence.
+    """
+
+    def __init__(self, root: str | Path, model_name: str = DEFAULT_TEXT_MODEL, prompt: str = "sentence"):
+        if prompt not in PROMPTS:
+            raise ValueError(f"Unknown prompt {prompt!r}; expected one of {PROMPTS}")
         path = embeddings_path(root, model_name)
         if not path.exists():  # first use of this checkpoint: encode once, then reuse
             build_text_embeddings(root, model_name)
         table = torch.load(path, map_location="cpu", weights_only=True)
+        self._alias: dict[str, str] = {}
+        if prompt == "noun":
+            self._alias = {
+                sample["instruction"]: NOUN_TEMPLATE.format(sample["object_name"])
+                for sample in load_manifest(root)["samples"]
+            }
+            if not set(self._alias.values()) <= set(table["texts"]):  # table from before noun prompts
+                build_text_embeddings(root, model_name)
+                table = torch.load(path, map_location="cpu", weights_only=True)
         self.model_name: str = table["model"]
         self.embeddings: torch.Tensor = table["embeddings"]
         self._index = {text: position for position, text in enumerate(table["texts"])}
@@ -66,4 +87,4 @@ class TextEmbeddings:
 
     def __call__(self, texts: list[str]) -> torch.Tensor:
         """Embeddings ``[len(texts), D]`` in the given order."""
-        return self.embeddings[[self._index[text] for text in texts]]
+        return self.embeddings[[self._index[self._alias.get(text, text)] for text in texts]]

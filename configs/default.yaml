@@ -7,6 +7,7 @@ data:
   augment: true          # random horizontal / vertical flips on the training split
   num_workers: 4
   all_objects: false     # also load the grasps of every object of the image (factor arch only)
+  max_negative_overlap: 1.0  # swapped prompts only from objects whose grasp region overlaps the target at most this much
   max_train_samples: null  # set to a small number for smoke tests
   max_eval_samples: null
 
@@ -19,6 +20,7 @@ model:
   clip: openai/clip-vit-base-patch16
   clip_resolution: 224
   grounding: refine      # raw | refine
+  prompt: sentence       # sentence | noun ("a photo of a {object}"), how an instruction is encoded
   # --- shared
   channels: 32
   num_blocks: 5
@@ -28,6 +30,7 @@ model:
 loss:
   cf_weight: 0.0         # weight of the counterfactual prompt loss (0 disables it)
   cf_margin: 0.5
+  ground_weight: 0.0     # grounding supervision with the other objects as negatives (needs data.all_objects)
 
 train:
   epochs: 30

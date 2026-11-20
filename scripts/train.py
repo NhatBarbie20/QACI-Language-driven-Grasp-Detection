@@ -47,7 +47,7 @@ def main() -> None:
 
     if config["data"]["all_objects"] and config["model"]["arch"] != "factor":
         raise SystemExit("data.all_objects needs model.arch=factor (a language-independent geometry output)")
-    embeddings = TextEmbeddings(config["data"]["root"], text_model_name(config["model"]))
+    embeddings = TextEmbeddings(config["data"]["root"], text_model_name(config["model"]), config["model"]["prompt"])
     train_loader = make_loader(config, "train")
     val_loader = make_loader(config, "val")
     model = build_model(config["model"], embeddings.dim).to(device)
@@ -80,6 +80,7 @@ def main() -> None:
         print(
             f"epoch {epoch:3d}  loss {losses['total']:.4f}"
             + (f"  cf {losses['counterfactual']:.4f}" if "counterfactual" in losses else "")
+            + (f"  ground {losses['grounding']:.4f}" if "grounding" in losses else "")
             + f"  val SR {metrics['success_rate']:.3f}  ignore {metrics['ignore_rate']:.3f}"
             + f"  paired {metrics['paired_sr']:.3f}  ({record['seconds']:.0f}s)"
         )

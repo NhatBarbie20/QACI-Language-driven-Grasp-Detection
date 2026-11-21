@@ -20,3 +20,7 @@ ASSIGNMENT_VI.md
 
 # Downloaded papers (reading copies, not redistributed)
 /papers/
+
+# Local tooling
+/.vscode/
+/author-kit-CVPR2027-v1-latex/

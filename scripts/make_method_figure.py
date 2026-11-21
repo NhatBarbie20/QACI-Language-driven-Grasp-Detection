@@ -13,67 +13,68 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch  # noqa: E402
 
-BLUE, ORANGE, GREEN, RED, GREY = "#dbe9f6", "#fde5cc", "#dff0d8", "#f8d7da", "#eeeeee"
+BLUE, ORANGE, GREEN, GREY = "#dbe9f6", "#fde5cc", "#dff0d8", "#eeeeee"
 EDGE = "#444444"
 
 
-def box(ax, x, y, w, h, text, color, fontsize=7.5, style="round,pad=0.02"):
-    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle=style, facecolor=color, edgecolor=EDGE, linewidth=0.8))
+def box(ax, x, y, w, h, text, color, fontsize=7.0):
+    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02", facecolor=color, edgecolor=EDGE,
+                                linewidth=0.8))
     ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fontsize)
 
 
-def arrow(ax, start, end, color=EDGE, style="-|>", linestyle="-"):
+def arrow(ax, start, end, color=EDGE, linestyle="-"):
     ax.add_patch(
-        FancyArrowPatch(start, end, arrowstyle=style, mutation_scale=7, color=color, linewidth=0.9,
+        FancyArrowPatch(start, end, arrowstyle="-|>", mutation_scale=7, color=color, linewidth=0.9,
                         linestyle=linestyle, shrinkA=0, shrinkB=0)
     )
 
 
 def main() -> None:
-    figure, ax = plt.subplots(figsize=(6.9, 2.15))
+    figure, ax = plt.subplots(figsize=(3.35, 2.0))
     ax.set_xlim(0, 10)
-    ax.set_ylim(0, 3.1)
+    ax.set_ylim(0, 6.1)
     ax.axis("off")
 
-    # Vision path.
-    box(ax, 0.05, 1.25, 0.9, 0.6, "image $I$", GREY)
-    box(ax, 1.3, 1.25, 1.1, 0.6, "conv stem\n(shared)", BLUE)
-    box(ax, 2.9, 1.25, 1.9, 0.6, "5 residual blocks\n+ FiLM", BLUE)
-    box(ax, 5.3, 1.25, 1.1, 0.6, "decoder\n+ heads", BLUE)
-    arrow(ax, (0.95, 1.55), (1.3, 1.55))
-    arrow(ax, (2.4, 1.55), (2.9, 1.55))
-    arrow(ax, (4.8, 1.55), (5.3, 1.55))
+    # Inputs.
+    box(ax, 0.05, 3.85, 1.45, 0.9, "image $I$", GREY)
+    box(ax, 0.05, 0.3, 2.55, 0.9, "$t$: “grasp the knife”", GREEN, fontsize=6.2)
 
-    # Language path.
-    box(ax, 0.05, 2.45, 2.35, 0.5, "$t^{+}$: “Grasp the knife”", GREEN)
-    box(ax, 0.05, 0.15, 2.35, 0.5, "$t^{-}$: “Grasp the fork”", RED)
-    box(ax, 2.9, 2.45, 1.9, 0.5, "frozen CLIP text encoder", ORANGE)
-    box(ax, 2.9, 0.15, 1.9, 0.5, "frozen CLIP text encoder", ORANGE)
-    arrow(ax, (2.4, 2.7), (2.9, 2.7))
-    arrow(ax, (2.4, 0.4), (2.9, 0.4))
-    arrow(ax, (3.85, 2.45), (3.85, 1.85), color="#2e7d32")
-    arrow(ax, (3.85, 0.65), (3.85, 1.25), color="#c62828", linestyle="--")
-    ax.text(3.95, 2.13, r"$\gamma,\beta$", fontsize=7.5, color="#2e7d32")
-    ax.text(3.95, 0.88, r"$\gamma,\beta$", fontsize=7.5, color="#c62828")
+    # Geometry factor: trained, never sees the instruction.
+    box(ax, 2.3, 4.75, 2.9, 1.1, "geometry net\n(trained)", BLUE, fontsize=6.5)
+    box(ax, 5.95, 4.75, 1.8, 1.1, r"$G$, $\theta$, $w$", BLUE)
+    arrow(ax, (1.5, 4.55), (2.3, 5.2))
+    arrow(ax, (5.2, 5.3), (5.95, 5.3))
 
-    # Outputs.
-    box(ax, 6.9, 2.2, 1.35, 0.75, "$Q^{+}$, $\\cos2\\theta$,\n$\\sin2\\theta$, $W$", GREEN)
-    box(ax, 6.9, 0.15, 1.35, 0.75, "$Q^{-}$", RED)
-    arrow(ax, (6.4, 1.7), (6.9, 2.45), color="#2e7d32")
-    arrow(ax, (6.4, 1.4), (6.9, 0.6), color="#c62828", linestyle="--")
+    # Grounding factor: frozen CLIP similarity and a text-blind refinement.
+    box(ax, 2.3, 2.7, 2.9, 1.1, "CLIP image enc.\n(frozen) patches", ORANGE, fontsize=6.5)
+    box(ax, 3.1, 0.3, 2.1, 0.9, "CLIP text enc.\n(frozen)", ORANGE, fontsize=6.5)
+    box(ax, 5.75, 1.5, 1.3, 1.0, "cosine\nmap $c$", GREY, fontsize=6.5)
+    box(ax, 7.45, 1.5, 1.05, 1.0, "refine", BLUE, fontsize=6.5)
+    box(ax, 8.9, 1.5, 1.0, 1.0, "$S$", ORANGE)
+    arrow(ax, (1.5, 4.05), (2.3, 3.4))
+    arrow(ax, (2.6, 0.75), (3.1, 0.75))
+    arrow(ax, (5.2, 3.0), (6.0, 2.5))
+    arrow(ax, (5.2, 0.9), (6.0, 1.5))
+    arrow(ax, (7.05, 2.0), (7.45, 2.0))
+    arrow(ax, (8.5, 2.0), (8.9, 2.0))
+    # The refinement also reads geometry features, but never the text embedding.
+    arrow(ax, (4.6, 4.75), (7.9, 2.5), color="#888888", linestyle=":")
 
-    # Losses.
-    box(ax, 8.75, 2.2, 1.2, 0.75, r"$\mathcal{L}_{grasp}$" + "\n(vs. ground truth)", GREY)
-    box(ax, 8.75, 1.05, 1.2, 0.95, r"$\mathcal{L}_{cf}$" + "\n$Q^{+}>Q^{-}+m$\non region $R$", GREY)
-    arrow(ax, (8.25, 2.57), (8.75, 2.57))
-    arrow(ax, (8.25, 2.3), (8.75, 1.75), color="#2e7d32")
-    arrow(ax, (8.25, 0.55), (8.75, 1.3), color="#c62828", linestyle="--")
+    # Product.
+    box(ax, 8.5, 3.4, 1.45, 1.0, r"$Q=G\cdot S$", GREEN, fontsize=6.8)
+    arrow(ax, (7.75, 5.1), (8.95, 4.4))
+    arrow(ax, (9.4, 2.5), (9.4, 3.4))
+
+    # Supervision.
+    ax.text(7.9, 5.65, "all objects' grasps", fontsize=5.6, color="#2e7d32", ha="left", va="center")
+    ax.text(8.4, 3.9, "target grasps", fontsize=5.6, color="#c62828", ha="right", va="center")
 
     figure.subplots_adjust(left=0, right=1, top=1, bottom=0)
     out = Path("paper/figures")
     out.mkdir(parents=True, exist_ok=True)
     figure.savefig(out / "method.pdf")
-    figure.savefig(out / "method.png", dpi=200)
+    figure.savefig(out / "method.png", dpi=300)
     print(f"Saved {out / 'method.pdf'}")
 
 
